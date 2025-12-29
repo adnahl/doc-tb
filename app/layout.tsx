@@ -15,11 +15,15 @@ const navbar = (
 	<Navbar
 		logo={<b>Tu Banca</b>}
 		logoLink={'https://doc.tubanca.vip'}
-		projectLink="https://github.com/adnahl/doc-tb/edit/staff"
+		projectLink="https://github.com/adnahl/doc-tb"
 		// chatLink="https://discord.gg/"
 	/>
 )
-const footer = <Footer>MIT {new Date().getFullYear()} © Tu Banca.</Footer>
+const footer = (
+	<Footer>
+		Todos los derechos reservados {new Date().getFullYear()} © Tu Banca.
+	</Footer>
+)
 
 const search = <Search placeholder="Buscar.."></Search>
 
