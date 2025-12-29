@@ -34,7 +34,22 @@ export default async function RootLayout({
 }) {
 	return (
 		<html lang="es" dir="ltr" suppressHydrationWarning>
-			<Head />
+			<Head
+				color={{
+					hue: {
+						dark: 145,
+						light: 145,
+					},
+					saturation: {
+						dark: 60,
+						light: 60,
+					},
+					lightness: {
+						dark: 50,
+						light: 30,
+					},
+				}}
+			/>
 			<body>
 				<Layout
 					banner={banner}
