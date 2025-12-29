@@ -14,7 +14,7 @@ const banner = (
 const navbar = (
 	<Navbar
 		logo={<b>Tu Banca</b>}
-		logoLink={'https://docs.tubanca.vip'}
+		logoLink={'https://doc.tubanca.vip'}
 		projectLink="https://github.com/adnahl/doc-tb"
 		// chatLink="https://discord.gg/"
 	/>
