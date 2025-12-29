@@ -15,7 +15,7 @@ const navbar = (
 	<Navbar
 		logo={<b>Tu Banca</b>}
 		logoLink={'https://doc.tubanca.vip'}
-		projectLink="https://github.com/adnahl/doc-tb"
+		projectLink="https://github.com/adnahl/doc-tb/edit/staff"
 		// chatLink="https://discord.gg/"
 	/>
 )
@@ -36,7 +36,7 @@ export default async function RootLayout({
 					banner={banner}
 					navbar={navbar}
 					pageMap={await getPageMap()}
-					docsRepositoryBase="https://github.com/adnahl/doc-tb"
+					docsRepositoryBase="https://github.com/adnahl/doc-tb/edit/staff"
 					footer={footer}
 					search={search}
 				>
