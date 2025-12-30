@@ -58,6 +58,9 @@ export default async function RootLayout({
 					docsRepositoryBase="https://github.com/adnahl/doc-tb/edit/staff"
 					footer={footer}
 					search={search}
+					sidebar={{ defaultMenuCollapseLevel: 1 }}
+					editLink="Editar página"
+					feedback={{ content: 'Sugerencias' }}
 				>
 					{children}
 				</Layout>
