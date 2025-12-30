@@ -7,4 +7,6 @@ export default {
 	comunidad: 'Comunidad',
 	notificaciones: 'Notificaciones',
 	secciones: 'Secciones',
+	faq: 'Preguntas frecuentes',
+	contacto: 'Contacto',
 }
