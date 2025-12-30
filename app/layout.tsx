@@ -61,6 +61,7 @@ export default async function RootLayout({
 					sidebar={{ defaultMenuCollapseLevel: 1 }}
 					editLink="Editar página"
 					feedback={{ content: 'Sugerencias' }}
+					copyPageButton={false}
 				>
 					{children}
 				</Layout>
