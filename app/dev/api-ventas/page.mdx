@@ -1,0 +1,199 @@
+# API de ventas 
+`Versión: v1`
+
+La API de ventas concentra en el servidor la autorización, disponibilidad de sorteos, límites, validaciones y creación de tickets. **Los clientes no deben calcular ni enviar moneda, agencia, comisiones, límites o el total final.**
+
+### URL de producción:
+
+```text
+https://tubancavip.com/api/v1/store/sales
+```
+
+## Autenticación
+
+La API requiere un usuario autenticado. Desde la web de esta aplicación se usa la sesión por cookies. Para un cliente externo, envía el access token actual de Supabase:
+
+```http
+Authorization: Bearer <supabase-access-token>
+```
+
+El usuario debe estar activo, no tener rol `client` y ser el propietario de la taquilla solicitada. La API también aplica las excepciones de desarrollo configuradas por el servidor.
+
+La ruta permite CORS para `GET`, `POST` y `OPTIONS`. No envíes claves `service_role` ni otros secretos al cliente.
+
+## Consultar la venta disponible
+
+Obtiene el contexto vigente de una taquilla: sorteos abiertos, loterías permitidas, límites, ventas del día y la hora de Caracas usada por el servidor.
+
+```http
+GET /api/v1/store/sales?taquillaId=<uuid>
+Authorization: Bearer <supabase-access-token>
+```
+
+Ejemplo con `fetch`:
+
+```ts
+const response = await fetch(
+  `${API_URL}?taquillaId=${taquillaId}`,
+  {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  }
+)
+
+const result = await response.json()
+if (!response.ok) throw new Error(result.error.message)
+
+const saleContext = result.data
+```
+
+Respuesta exitosa (`200`):
+
+```json
+{
+  "data": {
+    "taquilla": {
+      "id": "uuid",
+      "name": "Taquilla principal",
+      "currency": "VES",
+      "agency_id": "uuid"
+    },
+    "agency": {
+      "min_bet": 100,
+      "max_bet": 100000,
+      "lotteries_ids": ["uuid"]
+    },
+    "lotteries": [
+      {
+        "id": "uuid",
+        "name": "Lotería",
+        "timeout": 5,
+        "min_number": 0,
+        "max_number": 99
+      }
+    ],
+    "schedules": [
+      {
+        "id": "uuid",
+        "lottery_id": "uuid",
+        "h": 14,
+        "m": 30,
+        "days_available": [0, 1, 2, 3, 4, 5, 6]
+      }
+    ],
+    "caracasTime": {
+      "year": 2026,
+      "month": 7,
+      "day": 29,
+      "weekday": 3,
+      "h": 14,
+      "m": 12,
+      "s": 0
+    }
+  }
+}
+```
+
+`schedules` contiene únicamente sorteos activos para el día y la hora de Caracas. Los arreglos adicionales (`dailyNumberSales`, `agencyLimits`, `customTicketNumbers`, `customScheduleNumbers` y `numbersByAgencyIdInDates`) se exponen para presentar disponibilidad en tiempo real. El servidor vuelve a consultar y validar todo al crear el ticket.
+
+## Crear un ticket
+
+Envía únicamente la taquilla y las líneas seleccionadas. `amount` y `prize` se expresan en la unidad visible de la moneda, no en centavos. Por ejemplo, para vender `10.00`, envía `10`.
+
+```http
+POST /api/v1/store/sales
+Content-Type: application/json
+Authorization: Bearer <supabase-access-token>
+```
+
+```json
+{
+  "taquillaId": "11111111-1111-1111-1111-111111111111",
+  "lines": [
+    {
+      "number": "05",
+      "scheduleId": "22222222-2222-2222-2222-222222222222",
+      "amount": 10,
+      "prize": 300
+    }
+  ]
+}
+```
+
+Ejemplo con `fetch`:
+
+```ts
+const response = await fetch(API_URL, {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${accessToken}`,
+  },
+  body: JSON.stringify({ taquillaId, lines }),
+})
+
+const result = await response.json()
+if (!response.ok) throw new Error(result.error.message)
+
+const ticket = result.data
+```
+
+Respuesta exitosa (`201`):
+
+```json
+{
+  "data": {
+    "ticket_id": "33333333-3333-3333-3333-333333333333",
+    "ticket_code": 123456
+  }
+}
+```
+
+## Validaciones del servidor
+
+Antes de crear el ticket, la API verifica, entre otras reglas:
+
+- Que la taquilla, usuario, agencia, lotería y sorteo estén disponibles.
+- Que el sorteo pertenezca a una lotería permitida para la agencia.
+- Horario de cierre usando la hora de Caracas del servidor.
+- Números bloqueados, montos positivos, mínimos, máximos y múltiplos por moneda.
+- Límites por ticket, sorteo, número y ventas diarias de agencia.
+- Comisiones, moneda, agencia y total usando los datos actuales del servidor.
+
+Una respuesta `422` indica que una regla de la banca no pasó:
+
+```json
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "El sorteo ... ha cerrado. (C20)"
+  }
+}
+```
+
+## Errores
+
+| Estado | Código | Significado |
+| --- | --- | --- |
+| `400` | `INVALID_REQUEST` | El body no cumple el contrato: UUID inválido, línea incompleta, más de 200 líneas, monto negativo, etc. |
+| `401` | `SALE_ERROR` | Falta autenticación o el usuario no puede operar la taquilla. |
+| `422` | `VALIDATION_ERROR` | El ticket no cumple una regla de la banca; muestra `error.message` al usuario. |
+| `503` | `SALE_ERROR` | La conexión a la base de datos no está disponible. |
+
+Formato común de error:
+
+```json
+{
+  "error": {
+    "code": "SALE_ERROR",
+    "message": "No autorizado para vender en esta taquilla"
+  }
+}
+```
+
+## Recomendaciones de cliente
+
+- Consulta `GET` al abrir la pantalla y vuelve a hacerlo al reanudar la aplicación o antes de mostrar disponibilidad actualizada.
+- Trata el `POST` como la decisión final: una disponibilidad mostrada previamente puede cambiar mientras el usuario prepara el ticket.
+- Tras un `422`, actualiza el contexto con `GET` y muestra el mensaje recibido.
+- Conserva el access token mediante el SDK oficial y renuévalo antes de caducar.
+- El endpoint no incluye idempotencia. Cada `POST` es tratado como un nuevo ticket.

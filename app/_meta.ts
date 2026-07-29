@@ -4,7 +4,7 @@ export default {
 	salir: 'Cerrar sesión',
 	password: 'Restablecer contraseña', // 2 options
 	ticket: 'Ticket',
-	comunidad: 'Comunidad',
+	dev: 'Desarrollador',
 	notificaciones: 'Notificaciones',
 	secciones: 'Secciones',
 	faq: 'Preguntas frecuentes',
