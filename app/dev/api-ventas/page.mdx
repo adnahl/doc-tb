@@ -1,12 +1,11 @@
-# API de ventas 
-`Versión: v1`
+# API de ventas `v1`
 
 La API de ventas concentra en el servidor la autorización, disponibilidad de sorteos, límites, validaciones y creación de tickets. **Los clientes no deben calcular ni enviar moneda, agencia, comisiones, límites o el total final.**
 
 ### URL de producción:
 
 ```text
-https://tubancavip.com/api/v1/store/sales
+/api/v1/store/sales
 ```
 
 ## Autenticación
@@ -97,7 +96,9 @@ Respuesta exitosa (`200`):
 
 ## Crear un ticket
 
-Envía únicamente la taquilla y las líneas seleccionadas. `amount` y `prize` se expresan en la unidad visible de la moneda, no en centavos. Por ejemplo, para vender `10.00`, envía `10`.
+Envía únicamente la taquilla, el número, el sorteo y el monto. `amount` se expresa en la unidad visible de la moneda, no en centavos. Por ejemplo, para vender `10.00`, envía `10`.
+
+No envíes `prize`: el servidor lo calcula con el multiplicador personalizado vigente para el número y la lotería, o con `winner_times` de la lotería cuando no hay una configuración personalizada.
 
 ```http
 POST /api/v1/store/sales
@@ -112,8 +113,7 @@ Authorization: Bearer <supabase-access-token>
     {
       "number": "05",
       "scheduleId": "22222222-2222-2222-2222-222222222222",
-      "amount": 10,
-      "prize": 300
+      "amount": 10
     }
   ]
 }
@@ -157,7 +157,7 @@ Antes de crear el ticket, la API verifica, entre otras reglas:
 - Horario de cierre usando la hora de Caracas del servidor.
 - Números bloqueados, montos positivos, mínimos, máximos y múltiplos por moneda.
 - Límites por ticket, sorteo, número y ventas diarias de agencia.
-- Comisiones, moneda, agencia y total usando los datos actuales del servidor.
+- Comisiones, moneda, agencia, total y premio usando los datos actuales del servidor.
 
 Una respuesta `422` indica que una regla de la banca no pasó:
 
@@ -195,5 +195,5 @@ Formato común de error:
 - Consulta `GET` al abrir la pantalla y vuelve a hacerlo al reanudar la aplicación o antes de mostrar disponibilidad actualizada.
 - Trata el `POST` como la decisión final: una disponibilidad mostrada previamente puede cambiar mientras el usuario prepara el ticket.
 - Tras un `422`, actualiza el contexto con `GET` y muestra el mensaje recibido.
-- Conserva el access token mediante el SDK oficial y renuévalo antes de caducar.
-- El endpoint no incluye idempotencia. Cada `POST` es tratado como un nuevo ticket.
+- Conserva el access token mediante el SDK oficial de Supabase y renuévalo antes de caducar.
+- El endpoint no incluye idempotencia. Cada `POST` es considerado como un nuevo ticket.
