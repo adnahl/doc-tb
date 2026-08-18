@@ -116,6 +116,7 @@ Respuesta exitosa (`200`):
       {
         "id": "uuid",
         "name": "Lotería",
+        "lottery_type": "O",
         "timeout": 5,
         "min_number": 0,
         "max_number": 99
@@ -142,6 +143,8 @@ Respuesta exitosa (`200`):
   }
 }
 ```
+
+`lottery_type` permite filtrar las loterías por tipo y puede tener los valores `O`, `N` o `Z`.
 
 `schedules` contiene únicamente sorteos activos para el día y la hora de Caracas. Los arreglos adicionales (`dailyNumberSales`, `agencyLimits`, `customTicketNumbers`, `customScheduleNumbers` y `numbersByAgencyIdInDates`) se exponen para presentar disponibilidad en tiempo real. El servidor vuelve a consultar y validar todo al crear el ticket.
 
