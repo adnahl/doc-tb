@@ -232,6 +232,7 @@ Una respuesta `422` indica que una regla de la banca no pasó:
 | `401` | `AUTHENTICATION_REQUIRED` | Falta el token, es inválido o está vencido. |
 | `400` | `SALE_ERROR` | El usuario autenticado no puede operar la taquilla o falló otra regla de acceso. |
 | `422` | `VALIDATION_ERROR` | El ticket no cumple una regla de la banca; muestra `error.message` al usuario. |
+| `429` | `RATE_LIMIT_EXCEEDED` | Límite de solicitudes excedido. Aplica espera incremental antes de reintentar. |
 | `503` | `SALE_ERROR` | La conexión a la base de datos no está disponible. |
 
 Formato común de error:
@@ -252,3 +253,23 @@ Formato común de error:
 - Tras un `422`, actualiza el contexto con `GET` y muestra el mensaje recibido.
 - Conserva el access token mediante el SDK oficial de Supabase y renuévalo antes de caducar.
 - El endpoint no incluye idempotencia. Cada `POST` es considerado como un nuevo ticket.
+
+## Límites de solicitudes
+
+Límites predeterminados:
+
+- 90 solicitudes por API key (o token) por minuto.
+- 90 solicitudes por IP por minuto.
+
+Cada respuesta incluye `RateLimit-Limit`, `RateLimit-Remaining` y `RateLimit-Reset` (segundos restantes de la ventana). Al superar el límite, la API responde `429 RATE_LIMIT_EXCEEDED` con `Retry-After` en segundos:
+
+```json
+{
+  "error": {
+    "code": "RATE_LIMIT_EXCEEDED",
+    "message": "Límite de solicitudes excedido. Espere antes de reintentar."
+  }
+}
+```
+
+Evita consultar saldo en cada pulsación del usuario. Ante un `429`, usa espera incremental con variación aleatoria y no ejecutes reintentos en bucle.
