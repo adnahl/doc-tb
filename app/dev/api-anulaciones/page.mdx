@@ -1,0 +1,122 @@
+# API de anulación de tickets `v1`
+
+Este endpoint permite anular un ticket desde un cliente. El servidor concentra la autorización y todas las validaciones de la banca: estado del usuario, estado del ticket, ventana de tiempo permitida y cierre de sorteos. **El cliente solo envía el identificador del ticket.**
+
+### URL de producción:
+
+```text
+/api/v1/store/cancel
+```
+
+## Autenticación
+
+La API requiere un usuario autenticado. Desde la web de esta aplicación se usa la sesión por cookies. Para un cliente externo, envía el access token actual de Supabase:
+
+```http
+Authorization: Bearer <supabase-access-token>
+```
+
+El usuario debe estar **activo**. Un token ausente, inválido o vencido devuelve `401 AUTHENTICATION_REQUIRED`.
+
+La ruta permite CORS para `POST` y `OPTIONS`. No envíes claves `service_role` ni otros secretos al cliente.
+
+## Anular un ticket
+
+Envía únicamente el identificador del ticket (`tid`) como UUID.
+
+```http
+POST /api/v1/store/cancel
+Content-Type: application/json
+Authorization: Bearer <supabase-access-token>
+```
+
+```json
+{
+  "tid": "33333333-3333-3333-3333-333333333333"
+}
+```
+
+Ejemplo con `fetch`:
+
+```ts
+const response = await fetch(`${API_URL}/api/v1/store/cancel`, {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${accessToken}`,
+  },
+  body: JSON.stringify({ tid }),
+})
+
+const result = await response.json()
+if (!response.ok) throw new Error(result.error.message)
+
+// result.data => { tid, cancel: true }
+```
+
+Respuesta exitosa (`200`):
+
+```json
+{
+  "data": {
+    "tid": "33333333-3333-3333-3333-333333333333",
+    "cancel": true
+  }
+}
+```
+
+## Validaciones del servidor
+
+Antes de anular el ticket, la API verifica, entre otras reglas:
+
+- Que el usuario esté autenticado y **activo**.
+- Que el ticket exista y **no esté ya anulado**.
+- Que ninguno de sus números esté **jugado** (estado distinto de `default`).
+- Que ninguno de sus números esté **pagado** (`paid`).
+- Que no se haya excedido la **ventana de tiempo** para anular desde la creación del ticket:
+  - `10 minutos` para usuarios estándar.
+  - `25 minutos` para usuarios `admin`.
+  - **Sin límite** para usuarios `master`.
+- Que ninguno de los **sorteos** asociados haya cerrado según la hora de Caracas del servidor.
+
+El usuario **super-master** omite las validaciones de números jugados y de cierre de sorteos.
+
+## Errores
+
+| Estado | Código | Significado |
+| --- | --- | --- |
+| `400` | `INVALID_REQUEST` | El body no cumple el contrato: `tid` ausente o UUID inválido. |
+| `400` | `CANCEL_ERROR` | Una regla de negocio no pasó (ticket ya anulado, números jugados/pagados, tiempo excedido, sorteo cerrado, etc.). Muestra `error.message` al usuario. |
+| `401` | `AUTHENTICATION_REQUIRED` | Falta el token, es inválido, está vencido o el usuario no está activo. |
+| `404` | `CANCEL_ERROR` | El ticket no existe. |
+| `429` | `RATE_LIMIT_EXCEEDED` | Límite de solicitudes excedido. Aplica espera incremental antes de reintentar. |
+| `500` | `CANCEL_ERROR` | Error inesperado al anular el ticket. |
+| `503` | `CANCEL_ERROR` | La conexión a la base de datos no está disponible. |
+
+Formato común de error:
+
+```json
+{
+  "error": {
+    "code": "CANCEL_ERROR",
+    "message": "Tiempo para anular el ticket excedido"
+  }
+}
+```
+
+## Recomendaciones de cliente
+
+- Usa el estado HTTP para el flujo de red y `error.code` para decisiones programáticas.
+- `error.message` está listo para presentarse al usuario.
+- Refresca el listado de tickets tras una anulación exitosa para reflejar el nuevo estado.
+
+## Límites de solicitudes
+
+Límites predeterminados:
+
+- 90 solicitudes por API key (o token) por minuto.
+- 90 solicitudes por IP por minuto.
+
+Cada respuesta incluye `RateLimit-Limit`, `RateLimit-Remaining` y `RateLimit-Reset` (segundos restantes de la ventana). Al superar el límite, la API responde `429 RATE_LIMIT_EXCEEDED` con `Retry-After` en segundos.
+
+Evita consultar saldo en cada pulsación del usuario. Ante un `429`, usa espera incremental con variación aleatoria y no ejecutes reintentos en bucle.
