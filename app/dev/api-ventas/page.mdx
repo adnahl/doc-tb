@@ -20,6 +20,57 @@ El usuario debe estar activo, no tener rol `client` y ser el propietario de la t
 
 La ruta permite CORS para `GET`, `POST` y `OPTIONS`. No envíes claves `service_role` ni otros secretos al cliente.
 
+Cada solicitud a `access` o `sales` valida el JWT de manera independiente. No es obligatorio llamar primero a `access`: aunque un cliente omita esa consulta, `POST /sales` vuelve a comprobar autenticación y todas las reglas de acceso antes de crear el ticket. Un token ausente, inválido o vencido devuelve `401 AUTHENTICATION_REQUIRED`.
+
+## Comprobar acceso a una taquilla
+
+Este endpoint ejecuta los mismos controles usados para la creación de tickets. Es útil para bloquear o redirigir al usuario en una aplicación externa antes de cargar el contexto completo.
+
+```http
+GET /api/v1/store/access?taquillaId=<uuid>
+Authorization: Bearer <supabase-access-token>
+```
+
+Respuesta permitida (`200`):
+
+```json
+{
+  "data": {
+    "allowed": true,
+    "timerExpiresAt": 1786993200000
+  }
+}
+```
+
+Respuesta denegada (`400`, `401`, `403`, `404` o `500`, según la causa):
+
+```json
+{
+  "data": {
+    "allowed": false,
+    "code": "PORTAL_CLOSED",
+    "status": 403,
+    "variant": "warning",
+    "title": "Portal cerrado",
+    "message": "El horario de ventas ha finalizado.",
+    "recoveryAction": "OPEN_TAQUILLA"
+  }
+}
+```
+
+El endpoint comprueba banca activa, horario, modo standby y grupos excluidos; autenticación, rol, estado y propiedad del usuario; estado y moneda de la taquilla; agencia, grupo y zona; antigüedad del último cuadre; límites de venta y utilidad de banca; y creación del temporizador de sesión. Los textos, estilos y reglas habilitadas se toman de `bank_access_control`.
+
+El cliente debe usar el estado HTTP para el flujo de red y `data.code` para decisiones programáticas. `title`, `message` y `variant` están listos para presentar el rechazo al usuario.
+
+`recoveryAction` expresa una intención independiente de la plataforma y nunca contiene una URL. Sus valores actuales son:
+
+| Acción | Significado |
+| --- | --- |
+| `GO_HOME` | Salir del flujo de venta y volver a la pantalla principal definida por el cliente. |
+| `OPEN_TAQUILLA` | Salir de la venta y abrir la información de la taquilla solicitada. |
+
+Cada aplicación decide cómo navegar. Por ejemplo, la web puede mapear `OPEN_TAQUILLA` a `/banca/taquillas/:id`, mientras una app móvil puede abrir `TaquillaDetails` y otro sistema web puede usar su propia ruta. El cliente también puede ignorar `recoveryAction` y limitarse a mostrar el rechazo.
+
 ## Consultar la venta disponible
 
 Obtiene el contexto vigente de una taquilla: sorteos abiertos, loterías permitidas, límites, ventas del día y la hora de Caracas usada por el servidor.
@@ -175,7 +226,8 @@ Una respuesta `422` indica que una regla de la banca no pasó:
 | Estado | Código | Significado |
 | --- | --- | --- |
 | `400` | `INVALID_REQUEST` | El body no cumple el contrato: UUID inválido, línea incompleta, más de 200 líneas, monto negativo, etc. |
-| `401` | `SALE_ERROR` | Falta autenticación o el usuario no puede operar la taquilla. |
+| `401` | `AUTHENTICATION_REQUIRED` | Falta el token, es inválido o está vencido. |
+| `400` | `SALE_ERROR` | El usuario autenticado no puede operar la taquilla o falló otra regla de acceso. |
 | `422` | `VALIDATION_ERROR` | El ticket no cumple una regla de la banca; muestra `error.message` al usuario. |
 | `503` | `SALE_ERROR` | La conexión a la base de datos no está disponible. |
 
