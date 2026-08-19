@@ -10,13 +10,15 @@ Este endpoint permite anular un ticket desde un cliente. El servidor concentra l
 
 ## Autenticación
 
-La API requiere un usuario autenticado. Desde la web de esta aplicación se usa la sesión por cookies. Para un cliente externo, envía el access token actual de Supabase:
+La API requiere un usuario autenticado. Desde la web de esta aplicación se usa la sesión por cookies (no se envía el header `Authorization`). Para un cliente externo se usa un **API token de taquilla**, que el dueño genera, rota y revoca desde la web (`/banca/taquillas/:id`):
 
 ```http
-Authorization: Bearer <supabase-access-token>
+Authorization: Bearer tbk_<api-token>
 ```
 
-El usuario debe estar **activo**. Un token ausente, inválido o vencido devuelve `401 AUTHENTICATION_REQUIRED`.
+El token empieza con el prefijo `tbk_` y está vinculado a **una sola taquilla**: solo se pueden anular tickets de esa taquilla; en otro caso la API responde `403`. El token solo se muestra una vez al generarlo o rotarlo: guárdalo de forma segura en el cliente. Si se pierde o se sospecha de fuga, revócalo y genera uno nuevo.
+
+El usuario debe estar **activo**. Un token `tbk_` inválido o revocado devuelve `401`; una sesión web ausente o vencida devuelve `401 AUTHENTICATION_REQUIRED`.
 
 La ruta permite CORS para `POST` y `OPTIONS`. No envíes claves `service_role` ni otros secretos al cliente.
 
@@ -27,7 +29,7 @@ Envía únicamente el identificador del ticket (`tid`) como UUID.
 ```http
 POST /api/v1/store/cancel
 Content-Type: application/json
-Authorization: Bearer <supabase-access-token>
+Authorization: Bearer tbk_<api-token>
 ```
 
 ```json
@@ -43,7 +45,7 @@ const response = await fetch(`${API_URL}/api/v1/store/cancel`, {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
-    Authorization: `Bearer ${accessToken}`,
+    Authorization: `Bearer ${apiToken}`,
   },
   body: JSON.stringify({ tid }),
 })
@@ -71,6 +73,7 @@ Antes de anular el ticket, la API verifica, entre otras reglas:
 
 - Que el usuario esté autenticado y **activo**.
 - Que el ticket exista y **no esté ya anulado**.
+- Que el token de acceso (si se usa un API token) pertenezca a la taquilla del ticket.
 - Que ninguno de sus números esté **jugado** (estado distinto de `default`).
 - Que ninguno de sus números esté **pagado** (`paid`).
 - Que no se haya excedido la **ventana de tiempo** para anular desde la creación del ticket:
@@ -87,7 +90,9 @@ El usuario **super-master** omite las validaciones de números jugados y de cier
 | --- | --- | --- |
 | `400` | `INVALID_REQUEST` | El body no cumple el contrato: `tid` ausente o UUID inválido. |
 | `400` | `CANCEL_ERROR` | Una regla de negocio no pasó (ticket ya anulado, números jugados/pagados, tiempo excedido, sorteo cerrado, etc.). Muestra `error.message` al usuario. |
-| `401` | `AUTHENTICATION_REQUIRED` | Falta el token, es inválido, está vencido o el usuario no está activo. |
+| `401` | `CANCEL_ERROR` | Falta el token de acceso o el API token `tbk_` es inválido, está revocado o vencido. |
+| `401` | `AUTHENTICATION_REQUIRED` | El usuario no está activo. |
+| `403` | `CANCEL_ERROR` | El token de acceso no pertenece a la taquilla del ticket. |
 | `404` | `CANCEL_ERROR` | El ticket no existe. |
 | `429` | `RATE_LIMIT_EXCEEDED` | Límite de solicitudes excedido. Aplica espera incremental antes de reintentar. |
 | `500` | `CANCEL_ERROR` | Error inesperado al anular el ticket. |
