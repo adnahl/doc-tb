@@ -10,17 +10,19 @@ La API de ventas concentra en el servidor la autorización, disponibilidad de so
 
 ## Autenticación
 
-La API requiere un usuario autenticado. Desde la web de esta aplicación se usa la sesión por cookies. Para un cliente externo, envía el access token actual de Supabase:
+La API requiere un usuario autenticado. Desde la web de esta aplicación se usa la sesión por cookies (no se envía el header `Authorization`). Para un cliente externo se usa un **API token de taquilla**, que el dueño genera, rota y revoca desde la web (`/banca/taquillas/:id`):
 
 ```http
-Authorization: Bearer <supabase-access-token>
+Authorization: Bearer tbk_<api-token>
 ```
+
+El token empieza con el prefijo `tbk_` y está vinculado a **una sola taquilla**: todas las solicitudes (`access`, `sales`) deben apuntar a esa taquilla; si el `taquillaId` no coincide, la API responde `403 TOKEN_TAQUILLA_MISMATCH`. El token solo se muestra una vez al generarlo o rotarlo: guárdalo de forma segura en el cliente. Si se pierde o se sospecha de fuga, revócalo y genera uno nuevo.
 
 El usuario debe estar activo, no tener rol `client` y ser el propietario de la taquilla solicitada. La API también aplica las excepciones de desarrollo configuradas por el servidor.
 
 La ruta permite CORS para `GET`, `POST` y `OPTIONS`. No envíes claves `service_role` ni otros secretos al cliente.
 
-Cada solicitud a `access` o `sales` valida el JWT de manera independiente. No es obligatorio llamar primero a `access`: aunque un cliente omita esa consulta, `POST /sales` vuelve a comprobar autenticación y todas las reglas de acceso antes de crear el ticket. Un token ausente, inválido o vencido devuelve `401 AUTHENTICATION_REQUIRED`.
+Cada solicitud a `access` o `sales` valida el token de manera independiente. No es obligatorio llamar primero a `access`: aunque un cliente omita esa consulta, `POST /sales` vuelve a comprobar autenticación y todas las reglas de acceso antes de crear el ticket. Un token `tbk_` inválido o revocado devuelve `401 INVALID_API_TOKEN`; una sesión web ausente o vencida devuelve `401 AUTHENTICATION_REQUIRED`.
 
 ## Comprobar acceso a una taquilla
 
@@ -28,7 +30,7 @@ Este endpoint ejecuta los mismos controles usados para la creación de tickets. 
 
 ```http
 GET /api/v1/store/access?taquillaId=<uuid>
-Authorization: Bearer <supabase-access-token>
+Authorization: Bearer tbk_<api-token>
 ```
 
 Respuesta permitida (`200`):
@@ -77,7 +79,7 @@ Obtiene el contexto vigente de una taquilla: sorteos abiertos, loterías permiti
 
 ```http
 GET /api/v1/store/sales?taquillaId=<uuid>
-Authorization: Bearer <supabase-access-token>
+Authorization: Bearer tbk_<api-token>
 ```
 
 Ejemplo con `fetch`:
@@ -86,7 +88,7 @@ Ejemplo con `fetch`:
 const response = await fetch(
   `${API_URL}?taquillaId=${taquillaId}`,
   {
-    headers: { Authorization: `Bearer ${accessToken}` },
+    headers: { Authorization: `Bearer ${apiToken}` },
   }
 )
 
@@ -157,7 +159,7 @@ No envíes `prize`: el servidor lo calcula con el multiplicador personalizado vi
 ```http
 POST /api/v1/store/sales
 Content-Type: application/json
-Authorization: Bearer <supabase-access-token>
+Authorization: Bearer tbk_<api-token>
 ```
 
 ```json
@@ -180,7 +182,7 @@ const response = await fetch(API_URL, {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
-    Authorization: `Bearer ${accessToken}`,
+    Authorization: `Bearer ${apiToken}`,
   },
   body: JSON.stringify({ taquillaId, lines }),
 })
@@ -207,6 +209,7 @@ Respuesta exitosa (`201`):
 Antes de crear el ticket, la API verifica, entre otras reglas:
 
 - Que la taquilla, usuario, agencia, lotería y sorteo estén disponibles.
+- Que el token de acceso (si se usa un API token) pertenezca a la taquilla solicitada.
 - Que el sorteo pertenezca a una lotería permitida para la agencia.
 - Horario de cierre usando la hora de Caracas del servidor.
 - Números bloqueados, montos positivos, mínimos, máximos y múltiplos por moneda.
@@ -229,11 +232,13 @@ Una respuesta `422` indica que una regla de la banca no pasó:
 | Estado | Código | Significado |
 | --- | --- | --- |
 | `400` | `INVALID_REQUEST` | El body no cumple el contrato: UUID inválido, línea incompleta, más de 200 líneas, monto negativo, etc. |
-| `401` | `AUTHENTICATION_REQUIRED` | Falta el token, es inválido o está vencido. |
+| `401` | `INVALID_API_TOKEN` | El API token `tbk_` es inválido o fue revocado. |
+| `401` | `AUTHENTICATION_REQUIRED` | Falta el token o la sesión web es inválida o está vencida. |
+| `403` | `TOKEN_TAQUILLA_MISMATCH` | El API token no pertenece a la taquilla solicitada. |
 | `400` | `SALE_ERROR` | El usuario autenticado no puede operar la taquilla o falló otra regla de acceso. |
 | `422` | `VALIDATION_ERROR` | El ticket no cumple una regla de la banca; muestra `error.message` al usuario. |
 | `429` | `RATE_LIMIT_EXCEEDED` | Límite de solicitudes excedido. Aplica espera incremental antes de reintentar. |
-| `503` | `SALE_ERROR` | La conexión a la base de datos no está disponible. |
+| `503` | `DATABASE_UNAVAILABLE` | La conexión a la base de datos no está disponible. |
 
 Formato común de error:
 
@@ -251,7 +256,7 @@ Formato común de error:
 - Consulta `GET` al abrir la pantalla y vuelve a hacerlo al reanudar la aplicación o antes de mostrar disponibilidad actualizada.
 - Trata el `POST` como la decisión final: una disponibilidad mostrada previamente puede cambiar mientras el usuario prepara el ticket.
 - Tras un `422`, actualiza el contexto con `GET` y muestra el mensaje recibido.
-- Conserva el access token mediante el SDK oficial de Supabase y renuévalo antes de caducar.
+- Guarda el API token de forma segura (por ejemplo, en el almacenamiento seguro del dispositivo) y revócalo desde la web si se filtra.
 - El endpoint no incluye idempotencia. Cada `POST` es considerado como un nuevo ticket.
 
 ## Límites de solicitudes
