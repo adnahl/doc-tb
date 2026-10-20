@@ -8,6 +8,16 @@ La API de ventas concentra en el servidor la autorización, disponibilidad de so
 /api/v1/store/sales
 ```
 
+## Migraciones de base de datos
+
+La creación de tickets requiere las migraciones de `supabase/migrations/`.
+Los triggers que validan loterías activas y horarios usan referencias calificadas
+(`public.lotteries`, `public.lottery_schedules`) porque la RPC de creación de
+tickets ejecuta con `search_path` vacío. Si una venta devuelve
+`relation "lotteries" does not exist`, aplica la migración
+`20261012120606_qualify_ticket_number_validation_relations.sql`; no es necesario
+crear otra tabla ni ampliar el `search_path`.
+
 ## Autenticación
 
 La API requiere un usuario autenticado. Desde la web de esta aplicación se usa la sesión por cookies (no se envía el header `Authorization`). Para un cliente externo se usa un **API token de taquilla**, que el dueño genera, rota y revoca desde la web (`/banca/taquillas/:id`):
@@ -112,7 +122,14 @@ Respuesta exitosa (`200`):
     "agency": {
       "min_bet": 100,
       "max_bet": 100000,
-      "lotteries_ids": ["uuid"]
+      "lotteries_ids": ["uuid"],
+      "mp": true
+    },
+    "bank": {
+      "timeout": 5,
+      "bank_sales_fee": 0,
+      "partner_sales_fee": 0,
+      "partner_percent_fee": 0
     },
     "lotteries": [
       {
@@ -146,15 +163,54 @@ Respuesta exitosa (`200`):
 }
 ```
 
-`lottery_type` permite filtrar las loterías por tipo y puede tener los valores `O`, `N` o `Z`.
+`data` también incluye `dailyNumberSales`, `customTicketNumbers`,
+`customScheduleNumbers`, `customWinnerTimesNumbers`, `agencyLimits` y
+`numbersByAgencyIdInDates`. `agency.mp` indica si la agencia envía ventas al
+operador MP. `bank` contiene el tiempo de cierre y las comisiones aplicables.
 
-`schedules` contiene únicamente sorteos activos para el día y la hora de Caracas. Los arreglos adicionales (`dailyNumberSales`, `agencyLimits`, `customTicketNumbers`, `customScheduleNumbers` y `numbersByAgencyIdInDates`) se exponen para presentar disponibilidad en tiempo real. El servidor vuelve a consultar y validar todo al crear el ticket.
+`lottery_type` permite filtrar las loterías por tipo y puede tener los valores
+`O`, `N`, `Z` o `COND`. `cond_by_lottery` es el UUID nullable de la lotería
+principal. Las `COND` no son entradas de venta directa.
+
+`schedules` contiene únicamente sorteos activos para el día y la hora de Caracas. Los arreglos adicionales se exponen para presentar disponibilidad en tiempo real. El servidor vuelve a consultar y validar todo al crear el ticket.
 
 ## Crear un ticket
 
 Envía únicamente la taquilla, el número, el sorteo y el monto. `amount` se expresa en la unidad visible de la moneda, no en centavos. Por ejemplo, para vender `10.00`, envía `10`.
 
 No envíes `prize`: el servidor lo calcula con el multiplicador personalizado vigente para el número y la lotería, o con `winner_times` de la lotería cuando no hay una configuración personalizada.
+
+### Jugadas condicionadas
+
+Envía únicamente las jugadas principales. El servidor agrega automáticamente
+todas sus loterías `COND` activas y habilitadas para la agencia en sorteos con
+la misma hora y minuto. Para Triple Fácil
+(`ad609cf6-63de-4533-9723-fc04b63920fd`), `123` produce `22` y `24`, `000`
+produce `99` y `01`, y `299` produce `98` y `00`.
+
+Cada derivado hereda el monto del triple para calcular su premio con el
+multiplicador de la COND, **sin aumentar el cobro, ventas o comisiones y sin
+consumir límites**. Si varios triples generan el mismo número/sorteo, se
+acumulan sus apuestas conservando todos los orígenes. No envíes derivados ni
+metadatos de origen en `lines`: se reconstruyen en el servidor.
+
+Los números bloqueados por las reglas de la lotería y los sorteos no disponibles
+rechazan la jugada antes de guardar. Para una venta con jugadas condicionadas,
+si un número principal o derivado está bloqueado por un operador, se rechaza la
+venta antes de crear el ticket; una COND habilitada con regla aún no implementada
+también rechaza la venta. En una venta sin jugadas condicionadas, los números
+bloqueados por un operador se quitan del ticket: si todos quedan bloqueados, el
+ticket se anula y la API responde `422`; si quedan jugadas, conserva y ajusta las
+aceptadas. Si la agencia tiene `mp: true`, solo las jugadas principales se envían
+a MP y los derivados siguen las jugadas y montos que MP acepte. Si falla la
+reconciliación de derivados, se intenta anular el ticket y se devuelve
+`502 CONDITIONAL_RECONCILIATION_ERROR`, sin confirmar la venta. Si `data.cancel` es
+`false`, también falló la anulación: el ticket requiere revisión antes de
+reintentar.
+
+Las respuestas exitosas de tickets con COND incluyen `totalAmount` (centavos
+cobrados) y `countNumbers` (jugadas finales, incluidos derivados) en la raíz de
+la respuesta. Úsalos al compartir o mostrar un ticket ajustado por MP.
 
 ```http
 POST /api/v1/store/sales
@@ -199,10 +255,47 @@ Respuesta exitosa (`201`):
 {
   "data": {
     "ticket_id": "33333333-3333-3333-3333-333333333333",
-    "ticket_code": 123456
+    "ticket_code": 123456,
+    "cancel": false
   }
 }
 ```
+
+Si el operador MP acepta solo algunas jugadas o ajusta sus montos, la API también puede devolver `observaciones` y `reconciled` en la respuesta `201`. `reconciled` indica si se pudo actualizar el ticket con las jugadas aceptadas.
+
+### Ticket anulado o rechazado
+
+La API crea el ticket local antes de comprobar algunos rechazos de proveedores u obtener la respuesta del operador MP. Si luego debe rechazar la venta, la respuesta de error puede incluir `data` con el identificador y código del ticket:
+
+```json
+{
+  "data": {
+    "ticket_id": "33333333-3333-3333-3333-333333333333",
+    "ticket_code": 123456,
+    "cancel": true
+  },
+  "error": {
+    "code": "MP_TICKET_REJECTED",
+    "message": "El operador rechazó todas las jugadas",
+    "observaciones": []
+  }
+}
+```
+
+`data.cancel: true` confirma que la anulación se completó. Si `cancel` es `false`, la anulación no se pudo completar; el ticket debe verificarse antes de reintentar la venta. En ambos casos, si la respuesta HTTP no es exitosa, no se debe tratar la operación como una venta confirmada.
+
+Si todos los números de una venta sin jugadas condicionadas están bloqueados por
+operadores, la API responde `422` (`BLOCKED_NUMBERS_REJECTED`) e incluye el
+resultado de la anulación. Si solo algunos están bloqueados, conserva las
+jugadas restantes y ajusta el ticket; si hay jugadas condicionadas y se bloquea
+cualquier número principal o derivado, rechaza la venta antes de crear el ticket
+con `422` (`CONDITIONAL_NUMBER_BLOCKED`). Cuando MP rechaza todas las jugadas,
+la API responde `422` (`MP_TICKET_REJECTED`). Si MP rechaza o ajusta solo algunas,
+puede conservar las aceptadas, reconciliar el ticket y responder `201` con
+`observaciones` y `reconciled`. Si la agencia no tiene MP habilitado, no se
+reenvían las jugadas al operador MP. Si no se pudo conectar con MP, la API
+responde `502` (`MP_TICKET_ERROR`) e incluye el ticket junto con el resultado de
+la anulación.
 
 ## Validaciones del servidor
 
@@ -231,14 +324,19 @@ Una respuesta `422` indica que una regla de la banca no pasó:
 
 | Estado | Código | Significado |
 | --- | --- | --- |
-| `400` | `INVALID_REQUEST` | El body no cumple el contrato: UUID inválido, línea incompleta, más de 200 líneas, monto negativo, etc. |
+| `400` | `INVALID_REQUEST` | El body no cumple el contrato: UUID inválido, línea incompleta, más de 200 líneas, monto no positivo, etc. |
 | `401` | `INVALID_API_TOKEN` | El API token `tbk_` es inválido o fue revocado. |
 | `401` | `AUTHENTICATION_REQUIRED` | Falta el token o la sesión web es inválida o está vencida. |
 | `403` | `TOKEN_TAQUILLA_MISMATCH` | El API token no pertenece a la taquilla solicitada. |
+| `503` | `DATABASE_UNAVAILABLE` | No se pudo establecer la conexión con la base de datos durante la autenticación. |
 | `400` | `SALE_ERROR` | El usuario autenticado no puede operar la taquilla o falló otra regla de acceso. |
 | `422` | `VALIDATION_ERROR` | El ticket no cumple una regla de la banca; muestra `error.message` al usuario. |
+| `422` | `CONDITIONAL_NUMBER_BLOCKED` | Un número principal o derivado está bloqueado por un operador; no se crea el ticket. |
+| `422` | `BLOCKED_NUMBERS_REJECTED` | Todas las jugadas están bloqueadas por operadores; la respuesta incluye el ticket y el resultado de la anulación en `data`. |
+| `422` | `MP_TICKET_REJECTED` | El operador MP rechazó la venta o todas las jugadas; la respuesta incluye el ticket y el resultado de la anulación en `data`. |
 | `429` | `RATE_LIMIT_EXCEEDED` | Límite de solicitudes excedido. Aplica espera incremental antes de reintentar. |
-| `503` | `DATABASE_UNAVAILABLE` | La conexión a la base de datos no está disponible. |
+| `502` | `MP_TICKET_ERROR` | No se pudo completar la comunicación con el operador MP; la respuesta incluye el ticket y el resultado de la anulación en `data`. |
+| `502` | `CONDITIONAL_RECONCILIATION_ERROR` | No se pudieron ajustar los derivados al monto aceptado por MP; `data.cancel` indica si se pudo anular el ticket. |
 
 Formato común de error:
 
@@ -250,6 +348,8 @@ Formato común de error:
   }
 }
 ```
+
+En los casos de anulación descritos arriba, la respuesta incluye además `data`; consulta `data.cancel` para saber si la anulación se completó.
 
 ## Recomendaciones de cliente
 
@@ -266,7 +366,14 @@ Límites predeterminados:
 - 90 solicitudes por API key (o token) por minuto.
 - 90 solicitudes por IP por minuto.
 
-Cada respuesta incluye `RateLimit-Limit`, `RateLimit-Remaining` y `RateLimit-Reset` (segundos restantes de la ventana). Al superar el límite, la API responde `429 RATE_LIMIT_EXCEEDED` con `Retry-After` en segundos:
+El control es en memoria por instancia del servidor. Para identificar el cliente
+usa `x-api-key` o `Authorization` y la IP; el límite puede variar entre
+instancias.
+
+Las respuestas que incluyen información del límite exponen `RateLimit-Limit`,
+`RateLimit-Remaining` y `RateLimit-Reset` (segundos restantes de la ventana).
+Al superar el límite, la API responde `429 RATE_LIMIT_EXCEEDED` con `Retry-After`
+en segundos:
 
 ```json
 {
